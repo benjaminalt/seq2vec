@@ -74,6 +74,10 @@ class InceptionModel(nn.Module):
         self.additional_input_dim = additional_input_dim
         self.output_dim = output_dim
 
+        self.input_limits = None
+        self.additional_input_limits = None
+        self.output_limits = None
+
         channels = [in_channels] + cast(List[int], self._expand_to_blocks(out_channels,
                                                                           num_blocks))
         bottleneck_channels = cast(List[int], self._expand_to_blocks(bottleneck_channels,
@@ -137,7 +141,10 @@ class InceptionModel(nn.Module):
             "kernel_sizes" : self.kernel_sizes,
             "use_residuals" : self.use_residuals,
             "additional_input_dim" : self.additional_input_dim,
-            "output_dim": self.output_dim
+            "output_dim": self.output_dim,
+            "input_limits": self.input_limits,
+            "additional_input_limits": self.additional_input_limits,
+            "output_limits": self.output_limits
         }, os.path.join(archive_dir, filename))
 
     @staticmethod
@@ -149,6 +156,12 @@ class InceptionModel(nn.Module):
                                checkpoint["use_residuals"], checkpoint["additional_input_dim"],
                                checkpoint["output_dim"])
         model.load_state_dict(checkpoint["state_dict"])
+        input_limits = checkpoint["input_limits"].to(device)
+        additional_input_limits = checkpoint["additional_input_limits"].to(device)
+        output_limits = checkpoint["output_limits"].to(device)
+        model.input_limits = input_limits
+        model.additional_input_limits = additional_input_limits
+        model.output_limits = output_limits
         model = model.to(device)
         return model
 
