@@ -2,6 +2,7 @@ import math
 import time
 
 import matplotlib.pyplot as plt
+import torch
 from matplotlib import ticker
 
 
@@ -37,3 +38,23 @@ def plot_loss_history(points, filepath=None, labels=None):
         plt.show()
     else:
         plt.savefig(filepath)
+
+
+def compute_f1(y_pred: torch.Tensor, y_true: torch.Tensor):
+    y_pred = torch.round(y_pred)
+    tp = (y_true * y_pred).sum().to(torch.float32)
+    tn = ((1 - y_true) * (1 - y_pred)).sum().to(torch.float32)
+    fp = ((1 - y_true) * y_pred).sum().to(torch.float32)
+    fn = (y_true * (1 - y_pred)).sum().to(torch.float32)
+
+    epsilon = 1e-7
+
+    precision = tp / (tp + fp + epsilon)
+    recall = tp / (tp + fn + epsilon)
+
+    f1 = 2 * (precision * recall) / (precision + recall + epsilon)
+    return precision, recall, f1
+
+
+def num_parameters(model):
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)

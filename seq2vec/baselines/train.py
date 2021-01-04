@@ -10,9 +10,8 @@ from torch.utils.data import TensorDataset, DataLoader, Dataset
 from tqdm import tqdm
 from utils import transformations
 
-from seq2vec.data import load_dataset
-from seq2vec.inception_time.model import InceptionModel
 from seq2vec.utils import plot_loss_history, time_since
+from seq2vec.baselines import model as models
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -56,11 +55,7 @@ def compute_limits(dataset: Dataset):
     return input_limits, additional_input_limits, output_limits
 
 
-def train(dataset_path, batch_size, num_epochs, learning_rate):
-    """
-    Train an InceptionTime network on "inverse frequency modulation": Given a modulated signal and a set of inputs,
-    find the original frequency of the carrier signal
-    """
+def train(dataset_path: str, baseline_type: str, batch_size, num_epochs, learning_rate):
     all_data = DirectoryDataset(dataset_path)
     input_limits, additional_input_limits, output_limits = compute_limits(all_data)
     split_idx = int(0.9 * len(all_data))
@@ -71,24 +66,25 @@ def train(dataset_path, batch_size, num_epochs, learning_rate):
     validate_loader = DataLoader(validation_data, batch_size=batch_size, drop_last=False, pin_memory=True,
                                  num_workers=1)
 
-    input_dim = input_limits.size(-1)
-    additional_input_dim = additional_input_limits.size(-1)
+    input_dim = input_limits.size(-1) + additional_input_limits.size(-1)
     output_dim = output_limits.size(-1)
-    print(f"Input dim: {input_dim}, additional input dim: {additional_input_dim}, output dim: {output_dim}")
-    model = InceptionModel(num_blocks=9, in_channels=input_dim, out_channels=32, bottleneck_channels=16, kernel_sizes=32,
-                           use_residuals=True, additional_input_dim=additional_input_dim, output_dim=output_dim)
+    model_class = getattr(models, baseline_type)
+    seq_len = 250
+    model = model_class(batch_size, seq_len, input_dim, output_dim)
+
     model.input_limits = input_limits
     model.additional_input_limits = additional_input_limits
     model.output_limits = output_limits
 
-    output_dir = os.path.join(os.path.abspath(os.path.dirname(__file__)), os.pardir, os.pardir, "output", "inception_time")
+    output_dir = os.path.join(os.path.abspath(os.path.dirname(__file__)), os.pardir, os.pardir, "output", "baselines")
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
     loss_history = train_loop(model, train_loader, validate_loader, num_epochs, learning_rate)
     timestamp = datetime.strftime(datetime.now(), "%Y%m%d_%H%M%S")
-    model.save(output_dir, f"{timestamp}_model.pt")
-    plot_loss_history(loss_history, os.path.join(output_dir, "{}_loss.png".format(timestamp)), labels=["Train", "Validate"])
+    model.save(output_dir)
+    plot_loss_history(loss_history, os.path.join(output_dir, "{}_{}_loss.png".format(baseline_type, timestamp)),
+                      labels=["Train", "Validate"])
 
 
 def train_loop(model, train_loader, val_loader, n_epochs, learning_rate):
@@ -108,9 +104,10 @@ def train_loop(model, train_loader, val_loader, n_epochs, learning_rate):
             inputs_scaled = transformations.scale(sim, *model.input_limits, -1, 1).to(device)
             additional_inputs = torch.cat((inputs, environment_inputs), dim=-1)
             additional_inputs_scaled = transformations.scale(additional_inputs, *model.additional_input_limits, -1, 1).to(device)
+            augmented_input_seq = torch.cat((inputs_scaled, additional_inputs_scaled.unsqueeze(1).repeat(1, inputs_scaled.size(1), 1)), dim=-1)
             labels = real[:, -1, 1].unsqueeze(-1).to(device)
             # labels_scaled = transformations.scale(labels, *model.output_limits, -1, 1).to(device)
-            batch_loss = train_step(inputs_scaled, additional_inputs_scaled, labels, model, optimizer, criterion, validate=False)
+            batch_loss = train_step(augmented_input_seq, labels, model, optimizer, criterion, validate=False)
             train_loss += batch_loss
 
         avg_train_loss = train_loss / len(train_loader)
@@ -123,9 +120,12 @@ def train_loop(model, train_loader, val_loader, n_epochs, learning_rate):
                 additional_inputs = torch.cat((inputs, environment_inputs), dim=-1)
                 additional_inputs_scaled = transformations.scale(additional_inputs, *model.additional_input_limits, -1,
                                                                  1).to(device)
+                augmented_input_seq = torch.cat(
+                    (inputs_scaled, additional_inputs_scaled.unsqueeze(1).repeat(1, inputs_scaled.size(1), 1)),
+                    dim=-1)
                 labels = real[:, -1, 1].unsqueeze(-1).to(device)
                 # labels_scaled = transformations.scale(labels, *model.output_limits, -1, 1).to(device)
-                batch_loss = train_step(inputs_scaled, additional_inputs_scaled, labels, model, optimizer, criterion, validate=True)
+                batch_loss = train_step(augmented_input_seq, labels, model, optimizer, criterion, validate=True)
                 val_loss += batch_loss
         avg_val_loss = val_loss / len(val_loader)
 
@@ -136,8 +136,8 @@ def train_loop(model, train_loader, val_loader, n_epochs, learning_rate):
     return loss_history
 
 
-def train_step(inputs, additional_inputs, labels, model, optimizer, criterion, validate=False):
-    output = model(inputs, additional_inputs)
+def train_step(inputs, labels, model, optimizer, criterion, validate=False):
+    output = model(inputs)
     loss = criterion(output, labels)
     if not validate:
         optimizer.zero_grad()
@@ -150,10 +150,11 @@ def main(args):
     batch_size = 64
     learning_rate = 5e-5
     num_epochs = 50
-    train(args.dataset_path, batch_size, num_epochs, learning_rate)
+    train(args.dataset_path, args.baseline_type, batch_size, num_epochs, learning_rate)
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("dataset_path", type=str)
+    parser.add_argument("baseline_type", type=str)
     main(parser.parse_args())
